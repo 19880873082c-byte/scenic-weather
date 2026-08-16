@@ -4,8 +4,8 @@
   "description": "查询中国景区未来天气，找到最适合游玩与拍照的一天。",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#f4f7f4",
-  "theme_color": "#147d72",
+  "background_color": "#eef4f5",
+  "theme_color": "#061f29",
   "lang": "zh-CN",
   "icons": [
     { "src": "/app-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
