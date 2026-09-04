@@ -2,11 +2,15 @@
   "name": "景候 · 中国景区最佳观景天气",
   "short_name": "景候",
   "description": "查询中国景区未来天气，找到最适合游玩与拍照的一天。",
+  "id": "/",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
   "background_color": "#eef4f5",
   "theme_color": "#061f29",
   "lang": "zh-CN",
+  "categories": ["travel", "weather", "utilities"],
+  "prefer_related_applications": false,
   "icons": [
     { "src": "/app-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
   ]

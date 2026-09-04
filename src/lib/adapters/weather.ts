@@ -1,7 +1,7 @@
 import { getCache } from "../cache";
 import { fetchJson } from "../http";
 import { getProviderStatus, getQWeatherRuntimeConfig } from "../provider-config";
-import { scoreDay } from "../scoring";
+import { rankDaysForViewing, scoreDay } from "../scoring";
 import type { CurrentWeather, DayWeather, ForecastResponse, HourWeather, Place } from "../types";
 import { addMinutes, average, round } from "../utils";
 import { applyOfficialAlerts, getQWeatherBundle, type QWeatherBundle } from "./qweather";
@@ -179,7 +179,7 @@ function normalizeForecast(place: Place, weather: OpenMeteoForecast, air: OpenMe
 }
 
 function rankDates(days: DayWeather[]): string[] {
-  return [...days].sort((a, b) => (b.warnings.length ? -8 : b.score) - (a.warnings.length ? -8 : a.score)).slice(0, 3).map((day) => day.date);
+  return rankDaysForViewing(days).slice(0, 3).map((day) => day.date);
 }
 
 function locationProviderLabel(place: Place): string {

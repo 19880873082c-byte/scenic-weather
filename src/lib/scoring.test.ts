@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { detectWeatherChanges, getWeights, scoreDay } from "./scoring";
+import { detectWeatherChanges, getWeights, rankDaysForViewing, scoreDay } from "./scoring";
 import type { DayWeather, ScenicType } from "./types";
 
 const base: Omit<DayWeather, "score" | "confidence" | "components" | "reasons" | "concerns" | "advice" | "warnings"> = {
@@ -10,7 +10,7 @@ const base: Omit<DayWeather, "score" | "confidence" | "components" | "reasons" |
 };
 
 describe("scenic scoring", () => {
-  it.each<ScenicType>(["mountain", "coast", "ancient-town", "grassland", "snow"])("scores %s and keeps weights normalized", (type) => {
+  it.each<ScenicType>(["mountain", "coast", "ancient-town", "grassland", "desert", "lake-waterfall", "snow", "general"])("scores %s and keeps weights normalized", (type) => {
     const weights = getWeights(type);
     expect(Object.values(weights).reduce((sum, weight) => sum + weight, 0)).toBeCloseTo(100, 5);
     const result = scoreDay(base, type, new Date("2026-08-12T12:00:00+08:00"));
@@ -39,5 +39,11 @@ describe("scenic scoring", () => {
     const changedRaw = { ...base, date: "2026-08-15", precipitationProbability: 85, windGusts: 55 };
     const changed = { ...changedRaw, ...scoreDay(changedRaw, "general", new Date("2026-08-12T12:00:00+08:00")) };
     expect(detectWeatherChanges([first, changed]).some((message) => message.includes("降雨概率"))).toBe(true);
+  });
+
+  it("always ranks a safe day ahead of a warned high-score day", () => {
+    const safe = { ...base, date: "2026-08-15", ...scoreDay({ ...base, date: "2026-08-15" }, "general") };
+    const warned = { ...safe, date: "2026-08-16", score: 100, warnings: ["雷暴风险"] };
+    expect(rankDaysForViewing([warned, safe]).map((day) => day.date)).toEqual([safe.date, warned.date]);
   });
 });

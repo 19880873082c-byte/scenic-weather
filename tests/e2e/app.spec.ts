@@ -16,6 +16,9 @@ test("searches real place, opens forecast and date details", async ({ page }, te
   await page.getByRole("button", { name: /黄山风景区.*安徽省/ }).first().click();
   await forecastResponse;
   await expect(page.getByRole("heading", { name: "黄山风景区" })).toBeVisible();
+  expect(page.url()).toContain("#place=");
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "黄山风景区" })).toBeVisible();
   await expect(page.locator("body")).not.toContainText("é»");
   await expect(page.getByText("未来最佳观景日")).toBeVisible();
   await expect(page.getByText("未来日期排行")).toBeVisible();
@@ -60,6 +63,14 @@ test("favorites, history, comparison and settings work", async ({ page }, testIn
   await expect(page.getByRole("heading", { name: "评分说明" })).toBeVisible();
   await page.getByRole("button", { name: "10 天" }).click();
   await expect(page.getByRole("button", { name: "10 天" })).toHaveClass(/active/);
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "清理", exact: true }).click();
+  await expect(page.getByRole("heading", { name: /天气不只晴雨/ })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => ({
+    favorites: localStorage.getItem("scenic-weather:favorites:v1"),
+    history: localStorage.getItem("scenic-weather:history:v1"),
+    latest: localStorage.getItem("scenic-weather:latest:v1"),
+  }))).toEqual({ favorites: null, history: null, latest: null });
 });
 
 test("queries an arbitrary China coordinate and exposes health status", async ({ page, request }) => {

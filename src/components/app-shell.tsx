@@ -3,9 +3,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertTriangle, ArrowLeft, BarChart3, Bell, Bookmark, BookmarkCheck, CalendarDays, Camera, Check, ChevronRight, Clock3, CloudSun, Compass, Download, Gauge, Heart, History, Home, Info, Layers3, LoaderCircle, LocateFixed, MapPin, Menu, Navigation, Search, Settings, Share2, ShieldAlert, SlidersHorizontal, Sparkles, SunMedium, Thermometer, Trash2, Umbrella, Wind, X } from "lucide-react";
 import type { DayWeather, ForecastResponse, OfficialWeatherAlert, Place, ScenicType } from "@/lib/types";
-import { detectWeatherChanges, scoreLabel } from "@/lib/scoring";
+import { detectWeatherChanges, rankDaysForViewing, scoreLabel } from "@/lib/scoring";
 import { weatherLabel } from "@/lib/weather-code";
-import { addHistory, defaultSettings, type HistoryItem, readLocal, STORE_KEYS, storeLatest, type UserSettings, writeLocal } from "@/lib/client-store";
+import { addHistory, clearStoredClientData, defaultSettings, type HistoryItem, isPlace, readFavorites, readHistory, readLatestForecast, readSettings, STORE_KEYS, storeLatest, type UserSettings, writeLocal } from "@/lib/client-store";
 import { WeatherIcon } from "./weather-icon";
 import { ScoreRing } from "./score-ring";
 import { HourlyExplorer } from "./hourly-explorer";
@@ -38,49 +38,71 @@ export function AppShell() {
   const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [hydrated, setHydrated] = useState(false);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const searchRequest = useRef<AbortController | null>(null);
+  const forecastRequest = useRef<AbortController | null>(null);
+  const forecastDays = useRef<UserSettings["forecastDays"]>(defaultSettings.forecastDays);
 
-  useEffect(() => { writeLocal(STORE_KEYS.settings, settings); }, [settings]);
+  useEffect(() => {
+    forecastDays.current = settings.forecastDays;
+    if (hydrated) writeLocal(STORE_KEYS.settings, settings);
+  }, [hydrated, settings]);
 
-  const loadForecast = useCallback(async (place: Place, overrideDays?: 7 | 10 | 15) => {
+  const loadForecast = useCallback(async (place: Place, overrideDays?: 7 | 10 | 15, syncUrl = true) => {
+    searchRequest.current?.abort();
+    forecastRequest.current?.abort();
+    const controller = new AbortController();
+    forecastRequest.current = controller;
     setLoading(true); setError(""); setSelectedDate(null); setCompareDates([]);
     try {
-      const params = new URLSearchParams({ ...Object.fromEntries(Object.entries(place).map(([key, value]) => [key, String(value)])), days: String(overrideDays ?? settings.forecastDays) });
-      const response = await fetch(`/api/forecast?${params}`);
+      const params = new URLSearchParams({ ...Object.fromEntries(Object.entries(place).map(([key, value]) => [key, String(value)])), days: String(overrideDays ?? forecastDays.current) });
+      const response = await fetch(`/api/forecast?${params}`, { signal: controller.signal });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "天气查询失败");
-      setForecast(data as ForecastResponse); storeLatest(data as ForecastResponse); setHistory(addHistory(place)); setView("detail");
+      const nextForecast = data as ForecastResponse;
+      setForecast(nextForecast); storeLatest(nextForecast); setHistory(addHistory(place)); setView("detail");
+      if (syncUrl) updateShareAddress(place);
     } catch (cause) {
-      const latest = readLocal<ForecastResponse | null>(STORE_KEYS.latest, null);
+      if (isAbortError(cause)) return;
+      const latest = readLatestForecast();
       if (latest?.place.id === place.id) { setForecast({ ...latest, stale: true, cached: true }); setView("detail"); setNotice("网络不可用，已显示最近一次成功结果"); }
       else setError(cause instanceof Error ? cause.message : "天气查询失败");
-    } finally { setLoading(false); }
-  }, [settings.forecastDays]);
+    } finally {
+      if (forecastRequest.current === controller) { forecastRequest.current = null; setLoading(false); }
+    }
+  }, []);
 
   const searchPlaces = useCallback(async (text: string, auto = false) => {
-    const value = text.trim(); if (!value) { setPlaces([]); return; }
+    const value = text.trim();
+    searchRequest.current?.abort();
+    if (!value) { setPlaces([]); setSearching(false); return; }
+    const controller = new AbortController();
+    searchRequest.current = controller;
     setSearching(true); setError("");
     try {
-      const response = await fetch(`/api/places?q=${encodeURIComponent(value)}`); const data = await response.json();
+      const response = await fetch(`/api/places?q=${encodeURIComponent(value)}`, { signal: controller.signal }); const data = await response.json();
       if (!response.ok) throw new Error(data.error || "地点搜索失败");
       const next = data.places as Place[]; setPlaces(next);
       if (!auto) setView("results");
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "地点搜索失败"); if (!auto) setView("results"); }
-    finally { setSearching(false); }
+    } catch (cause) {
+      if (isAbortError(cause)) return;
+      setError(cause instanceof Error ? cause.message : "地点搜索失败"); if (!auto) setView("results");
+    } finally {
+      if (searchRequest.current === controller) { searchRequest.current = null; setSearching(false); }
+    }
   }, []);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      setHydrated(true);
-      const storedSettings = readLocal<UserSettings>(STORE_KEYS.settings, defaultSettings);
-      setFavorites(readLocal<Place[]>(STORE_KEYS.favorites, []));
-      setHistory(readLocal<HistoryItem[]>(STORE_KEYS.history, []));
+      const storedSettings = readSettings();
+      forecastDays.current = storedSettings.forecastDays;
+      setFavorites(readFavorites());
+      setHistory(readHistory());
       setSettings(storedSettings);
-      const latest = readLocal<ForecastResponse | null>(STORE_KEYS.latest, null);
-      if (window.location.hash.startsWith("#place=")) {
-        try {
-          const shared = JSON.parse(decodeURIComponent(atob(window.location.hash.slice(7)))) as Place;
-          void loadForecast(shared, storedSettings.forecastDays);
-        } catch { /* ignore invalid share */ }
+      setHydrated(true);
+      const latest = readLatestForecast();
+      const shared = readSharedPlace();
+      if (shared) {
+        void loadForecast(shared, storedSettings.forecastDays, false);
       } else if (!navigator.onLine && latest) {
         setForecast({ ...latest, stale: true, cached: true }); setView("detail");
       }
@@ -90,14 +112,26 @@ export function AppShell() {
       else navigator.serviceWorker.getRegistrations().then((items) => Promise.all(items.map((item) => item.unregister()))).catch(() => undefined);
     }
     const handler = (event: Event) => { event.preventDefault(); setInstallPrompt(event as BeforeInstallPromptEvent); };
+    const restoreFromAddress = () => {
+      const shared = readSharedPlace();
+      if (shared) void loadForecast(shared, forecastDays.current, false);
+      else { forecastRequest.current?.abort(); setLoading(false); setView("home"); }
+    };
     window.addEventListener("beforeinstallprompt", handler);
-    return () => { window.clearTimeout(timer); window.removeEventListener("beforeinstallprompt", handler); };
+    window.addEventListener("popstate", restoreFromAddress);
+    return () => {
+      window.clearTimeout(timer);
+      if (searchTimer.current) window.clearTimeout(searchTimer.current);
+      searchRequest.current?.abort(); forecastRequest.current?.abort();
+      window.removeEventListener("beforeinstallprompt", handler);
+      window.removeEventListener("popstate", restoreFromAddress);
+    };
     // Initialization intentionally runs once; callbacks use the stored day preference for shared links.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const onQuery = (value: string) => {
-    setQuery(value); if (searchTimer.current) clearTimeout(searchTimer.current);
+    setQuery(value); setPlaces([]); if (searchTimer.current) clearTimeout(searchTimer.current);
     if (value.trim()) searchTimer.current = setTimeout(() => void searchPlaces(value, true), 360); else setPlaces([]);
   };
 
@@ -117,8 +151,24 @@ export function AppShell() {
   const openDate = (date: string) => { setSelectedDate(date); setView("date"); window.scrollTo({ top: 0, behavior: "smooth" }); };
   const share = async () => {
     if (!forecast) return;
-    const url = `${window.location.origin}${window.location.pathname}#place=${btoa(encodeURIComponent(JSON.stringify(forecast.place)))}`;
-    try { if (navigator.share) await navigator.share({ title: `${forecast.place.name}最佳观景天气`, text: `${forecast.place.name}未来观景指数`, url }); else { await navigator.clipboard.writeText(url); setNotice("分享链接已复制"); } } catch { /* user cancelled */ }
+    const url = shareUrl(forecast.place);
+    const best = forecast.days.find((day) => day.date === forecast.bestDates[0]);
+    try {
+      if (navigator.share) await navigator.share({ title: `${forecast.place.name}最佳观景天气`, text: best ? `${forecast.place.name}推荐日期 ${formatShortDate(best.date)}，观景指数 ${best.score}/100` : `${forecast.place.name}未来观景指数`, url });
+      else { await copyShareUrl(url); setNotice("分享链接已复制"); }
+    } catch (cause) {
+      if (!isAbortError(cause)) setNotice("无法自动分享，请复制浏览器地址栏中的链接");
+    }
+  };
+
+  const clearAppData = async () => {
+    if (!window.confirm("确定清除收藏、历史、设置和离线结果吗？此操作无法撤销。")) return;
+    searchRequest.current?.abort(); forecastRequest.current?.abort();
+    clearStoredClientData();
+    if ("caches" in window) await caches.keys().then((keys) => Promise.all(keys.map((key) => caches.delete(key)))).catch(() => undefined);
+    setFavorites([]); setHistory([]); setSettings({ ...defaultSettings }); setForecast(null); setPlaces([]); setQuery(""); setSelectedDate(null); setCompareDates([]); setError(""); setView("home");
+    window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
+    setNotice("收藏、历史、设置和离线结果已清理");
   };
 
   const selectedDay = forecast?.days.find((day) => day.date === selectedDate) ?? null;
@@ -129,7 +179,7 @@ export function AppShell() {
       <Header title={title} view={view} setView={setView} mobileNav={mobileNav} setMobileNav={setMobileNav} />
       {mobileNav && <MobileMenu setView={(next) => { setView(next); setMobileNav(false); }} />}
       <main>
-        {error && <div className="global-message error"><AlertTriangle size={18} /><span>{error}</span><button onClick={() => setError("")} aria-label="关闭"><X size={17} /></button></div>}
+        {error && <div className="global-message error" role="alert"><AlertTriangle size={18} /><span>{error}</span><button onClick={() => setError("")} aria-label="关闭"><X size={17} /></button></div>}
         {notice && <Toast text={notice} close={() => setNotice("")} />}
         {loading && <LoadingState />}
         {!loading && view === "home" && <HomeView query={query} onQuery={onQuery} runSearch={runSearch} directSearch={(text) => { setQuery(text); void searchPlaces(text); }} places={places} searching={searching} choose={loadForecast} favorites={favorites} history={history} locate={() => locateCurrent(loadForecast, setError)} hydrated={hydrated} />}
@@ -138,7 +188,7 @@ export function AppShell() {
         {!loading && forecast && selectedDay && view === "date" && <DateView forecast={forecast} day={selectedDay} settings={settings} compareDates={compareDates} toggleCompare={toggleCompare} />}
         {!loading && forecast && view === "compare" && <CompareView forecast={forecast} dates={compareDates.length ? compareDates : forecast.bestDates} toggleCompare={toggleCompare} openDate={openDate} />}
         {!loading && view === "library" && <LibraryView favorites={favorites} history={history} choose={loadForecast} removeFavorite={toggleFavorite} clearHistory={() => { setHistory([]); writeLocal(STORE_KEYS.history, []); }} />}
-        {!loading && view === "settings" && <SettingsView settings={settings} setSettings={setSettings} installPrompt={installPrompt} install={() => installPrompt?.prompt()} clearCache={() => clearAppData(setNotice)} />}
+        {!loading && view === "settings" && <SettingsView settings={settings} setSettings={setSettings} installPrompt={installPrompt} install={() => installPrompt?.prompt()} clearCache={() => void clearAppData()} />}
         {!loading && view !== "home" && ((view === "detail" || view === "date" || view === "compare") ? !forecast : false) && <EmptyState />}
       </main>
       <BottomNav view={view} setView={setView} hasForecast={Boolean(forecast)} />
@@ -158,8 +208,8 @@ function Header({ title, view, setView, mobileNav, setMobileNav }: { title: stri
 function MobileMenu({ setView }: { setView: (v: View) => void }) { return <div className="mobile-menu"><button onClick={() => setView("home")}><Search size={18} />搜索景区</button><button onClick={() => setView("library")}><Heart size={18} />收藏与历史</button><button onClick={() => setView("settings")}><Settings size={18} />设置与说明</button></div>; }
 
 function SearchBox({ query, onQuery, runSearch, places, searching, choose, focus = false, hydrated = true }: { query: string; onQuery: (v: string) => void; runSearch: (e?: React.FormEvent) => void; places: Place[]; searching: boolean; choose: (p: Place) => void; focus?: boolean; hydrated?: boolean }) {
-  return <div className="search-wrap"><form className="search-box" onSubmit={runSearch}><Search size={23} /><input autoFocus={focus} disabled={!hydrated} value={query} onChange={(e) => onQuery(e.target.value)} placeholder="输入景区、地址，或纬度,经度" aria-label="景区名称或坐标" /><button type="submit" disabled={!hydrated}>查询天气</button></form>
-    {query.trim() && (places.length > 0 || searching) && <div className="suggestions">{searching && <div className="suggestion-loading"><LoaderCircle className="spin" size={18} />正在查找景区…</div>}{!searching && places.slice(0, 6).map((place) => <button key={place.id} onClick={() => choose(place)}><span className="place-pin"><MapPin size={18} /></span><span><strong>{place.name}</strong><small>{place.province} · {place.city} · {place.matchNote ?? place.address}</small></span><span className={`quality-pill ${place.quality ?? "provider"}`}>{qualityLabel(place)}</span></button>)}</div>}
+  return <div className="search-wrap"><form className="search-box" onSubmit={runSearch} aria-busy={searching}><Search size={23} /><input autoFocus={focus} disabled={!hydrated} value={query} onChange={(e) => onQuery(e.target.value)} placeholder="输入景区、地址，或纬度,经度" aria-label="景区名称或坐标" autoComplete="off" /><button type="submit" disabled={!hydrated}>查询天气</button></form>
+    {query.trim() && (places.length > 0 || searching) && <div className="suggestions" aria-live="polite">{searching && <div className="suggestion-loading"><LoaderCircle className="spin" size={18} />正在查找景区…</div>}{!searching && places.slice(0, 6).map((place) => <button key={place.id} onClick={() => choose(place)}><span className="place-pin"><MapPin size={18} /></span><span><strong>{place.name}</strong><small>{place.province} · {place.city} · {place.matchNote ?? place.address}</small></span><span className={`quality-pill ${place.quality ?? "provider"}`}>{qualityLabel(place)}</span></button>)}</div>}
     {!query.trim() && <div className="search-hint">搜索不到名称时，可输入“景区名 30.1339,118.1665”直接查询坐标点</div>}
   </div>;
 }
@@ -181,7 +231,7 @@ function ResultsView({ query, places, searching, choose, retry }: { query: strin
 
 function DetailView({ forecast, settings, favorites, toggleFavorite, openDate, compareDates, toggleCompare, openCompare, share, notify }: { forecast: ForecastResponse; settings: UserSettings; favorites: Place[]; toggleFavorite: (p: Place) => void; openDate: (d: string) => void; compareDates: string[]; toggleCompare: (d: string) => void; openCompare: () => void; share: () => void; notify: (message: string) => void }) {
   const best = forecast.days.find((day) => day.date === forecast.bestDates[0]) ?? forecast.days[0];
-  const ranked = [...forecast.days].sort((a, b) => b.score - a.score);
+  const ranked = rankDaysForViewing(forecast.days);
   const changes = settings.reminders ? detectWeatherChanges(forecast.days) : [];
   return <section className="detail-page"><div className="detail-heading"><div><span className="breadcrumb">首页 / {forecast.place.province} / {forecast.place.name}</span><h1>{forecast.place.name}</h1><p><MapPin size={15} />{forecast.place.province} · {forecast.place.city} · {typeLabels[forecast.place.type]} · <span className={`inline-quality ${forecast.place.quality ?? "provider"}`}>{qualityLabel(forecast.place)} {forecast.place.confidence ?? 50}%</span></p></div><div className="heading-actions"><button aria-label={favorites.some((item) => item.id === forecast.place.id) ? "已收藏" : "收藏"} onClick={() => toggleFavorite(forecast.place)}>{favorites.some((item) => item.id === forecast.place.id) ? <BookmarkCheck /> : <Bookmark />}<span>{favorites.some((item) => item.id === forecast.place.id) ? "已收藏" : "收藏"}</span></button><button aria-label="分享" onClick={share}><Share2 /><span>分享</span></button></div></div>
     {forecast.stale && <div className="stale-banner"><AlertTriangle size={18} /><span>当前显示离线缓存，数据更新于 {formatDateTime(forecast.fetchedAt)}。联网后请重新查询。</span></div>}
@@ -248,7 +298,7 @@ function severityLabel(severity: OfficialWeatherAlert["severity"]): string { ret
 function LoadingState() { return <div className="loading-state"><LoaderCircle className="spin" size={34} /><h2>正在连接天气服务</h2><p>获取真实预报并计算观景指数…</p></div>; }
 function LoadingRows() { return <div className="loading-rows">{[1, 2, 3].map((i) => <div key={i}><i /><span><b /><b /></span></div>)}</div>; }
 function EmptyState() { return <div className="empty-panel"><Compass size={34} /><h2>先搜索一个景区</h2></div>; }
-function Toast({ text, close }: { text: string; close: () => void }) { useEffect(() => { const id = setTimeout(close, 3200); return () => clearTimeout(id); }, [close]); return <div className="toast"><Check size={17} />{text}</div>; }
+function Toast({ text, close }: { text: string; close: () => void }) { useEffect(() => { const id = setTimeout(close, 3200); return () => clearTimeout(id); }, [close]); return <div className="toast" role="status" aria-live="polite"><Check size={17} />{text}</div>; }
 
 function locateCurrent(loadForecast: (place: Place) => Promise<void>, setError: (v: string) => void) {
   if (!navigator.geolocation) { setError("当前浏览器不支持定位"); return; }
@@ -258,7 +308,37 @@ function locateCurrent(loadForecast: (place: Place) => Promise<void>, setError: 
   }, () => setError("无法获取位置，请检查浏览器定位权限"), { timeout: 8000, maximumAge: 600_000 });
 }
 
-function clearAppData(setNotice: (v: string) => void) { Object.values(STORE_KEYS).forEach((key) => localStorage.removeItem(key)); if ("caches" in window) caches.keys().then((keys) => Promise.all(keys.map((key) => caches.delete(key)))); setNotice("本地收藏、历史和离线缓存已清理，刷新后生效"); }
+function shareUrl(place: Place): string {
+  const url = new URL(window.location.href);
+  url.hash = `place=${btoa(encodeURIComponent(JSON.stringify(place)))}`;
+  return url.toString();
+}
+
+function updateShareAddress(place: Place): void {
+  const url = shareUrl(place);
+  if (window.location.href !== url) window.history.pushState({ scenicPlaceId: place.id }, "", url);
+}
+
+function readSharedPlace(): Place | null {
+  if (!window.location.hash.startsWith("#place=")) return null;
+  try {
+    const decoded = JSON.parse(decodeURIComponent(atob(window.location.hash.slice(7)))) as unknown;
+    return isPlace(decoded) ? decoded : null;
+  } catch { return null; }
+}
+
+async function copyShareUrl(url: string): Promise<void> {
+  if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(url); return; }
+  const input = document.createElement("textarea");
+  input.value = url; input.style.position = "fixed"; input.style.opacity = "0";
+  document.body.appendChild(input); input.select();
+  const copied = document.execCommand("copy"); input.remove();
+  if (!copied) throw new Error("clipboard unavailable");
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
 function formatShortDate(date: string) { return new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric", timeZone: "Asia/Shanghai" }).format(new Date(`${date}T12:00:00+08:00`)); }
 function formatFullDate(date: string) { return new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long", day: "numeric", weekday: "long", timeZone: "Asia/Shanghai" }).format(new Date(`${date}T12:00:00+08:00`)); }
 function weekday(date: string) { return new Intl.DateTimeFormat("zh-CN", { weekday: "short", timeZone: "Asia/Shanghai" }).format(new Date(`${date}T12:00:00+08:00`)); }

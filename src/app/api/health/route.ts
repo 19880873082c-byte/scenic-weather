@@ -1,19 +1,28 @@
 import { NextResponse } from "next/server";
 import { getScenicRegistry } from "@/lib/db/registry";
+import { getDatabaseRuntimeStatus } from "@/lib/db/path";
 import { getProviderStatus } from "@/lib/provider-config";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
+  const provider = getProviderStatus();
+  const database = getDatabaseRuntimeStatus();
+  const problems = [...provider.problems, ...database.problems];
+  if (!database.configured) return response({
+    status: "unhealthy",
+    checkedAt: new Date().toISOString(),
+    services: { database: "not configured", placeSearch: process.env.AMAP_API_KEY ? "amap" : "open-meteo", weather: provider.qweather.configured ? "qweather + open-meteo fallback" : "open-meteo", coordinateFallback: true },
+    configuration: { weatherPreference: provider.preference, qweather: provider.qweather, problems },
+  }, 503);
   try {
     const registry = await getScenicRegistry().search("黄山", 1);
     if (!registry.length) throw new Error("registry is empty");
-    const provider = getProviderStatus();
     return response({
-      status: provider.problems.length ? "degraded" : "ok",
+      status: problems.length ? "degraded" : "ok",
       checkedAt: new Date().toISOString(),
       services: {
-        database: process.env.DATABASE_URL ? "postgresql" : "sqlite",
+        database: database.backend,
         placeSearch: process.env.AMAP_API_KEY ? "amap" : "open-meteo",
         weather: provider.preference !== "open-meteo" && provider.qweather.configured ? "qweather + open-meteo fallback" : "open-meteo",
         officialAlerts: provider.preference !== "open-meteo" && provider.qweather.configured ? "qweather" : "derived weather risks only",
@@ -22,7 +31,7 @@ export async function GET() {
       configuration: {
         weatherPreference: provider.preference,
         qweather: provider.qweather,
-        problems: provider.problems,
+        problems,
       },
     }, 200);
   } catch {

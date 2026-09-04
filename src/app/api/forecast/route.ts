@@ -15,12 +15,12 @@ export async function GET(request: Request) {
   const parsed = schema.safeParse(Object.fromEntries(url.searchParams.entries()));
   if (!parsed.success) return json({ error: "景区位置参数无效", details: parsed.error.flatten() }, 400);
   const client = request.headers.get("x-forwarded-for")?.split(",")[0] ?? "local";
-  if (!checkRateLimit(`forecast:${client}`, 20)) return json({ error: "天气查询过于频繁，请稍后再试" }, 429);
+  if (!checkRateLimit(`forecast:${client}`, 20)) return json({ error: "天气查询过于频繁，请稍后再试" }, 429, { "Retry-After": "60" });
   const { days, ...place } = parsed.data;
   try { return json(await getForecast(place, days)); }
   catch (error) { return json({ error: error instanceof Error ? error.message : "天气服务暂不可用" }, 502); }
 }
 
-function json(body: unknown, status = 200) {
-  return NextResponse.json(body, { status, headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" } });
+function json(body: unknown, status = 200, headers: Record<string, string> = {}) {
+  return NextResponse.json(body, { status, headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", ...headers } });
 }

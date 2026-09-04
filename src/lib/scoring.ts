@@ -130,6 +130,16 @@ export function summarizeDay(day: DayWeather): string {
   return `${weatherLabel(day.weatherCode)}，${round(day.temperatureMin)}–${round(day.temperatureMax)}°C，观景指数 ${day.score}`;
 }
 
+export function rankDaysForViewing(days: DayWeather[]): DayWeather[] {
+  return [...days].sort((a, b) => {
+    const warningPriority = Number(a.warnings.length > 0) - Number(b.warnings.length > 0);
+    if (warningPriority !== 0) return warningPriority;
+    if (b.score !== a.score) return b.score - a.score;
+    if (b.confidence !== a.confidence) return b.confidence - a.confidence;
+    return a.date.localeCompare(b.date);
+  });
+}
+
 export function detectWeatherChanges(days: DayWeather[]): string[] {
   const alerts: string[] = [];
   for (let index = 1; index < days.length; index += 1) {

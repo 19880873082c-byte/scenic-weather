@@ -25,10 +25,29 @@ export async function fetchJson<T>(url: string, init: RequestInit = {}, options:
   throw new UpstreamError(lastError instanceof Error ? `数据服务暂不可用：${lastError.message}` : "数据服务暂不可用");
 }
 
-const buckets = new Map<string, number[]>();
+interface RateBucket { timestamps: number[]; windowMs: number; lastSeen: number }
+const buckets = new Map<string, RateBucket>();
+let lastBucketSweep = 0;
+
 export function checkRateLimit(key: string, limit = 30, windowMs = 60_000): boolean {
   const now = Date.now();
-  const recent = (buckets.get(key) ?? []).filter((timestamp) => now - timestamp < windowMs);
-  if (recent.length >= limit) { buckets.set(key, recent); return false; }
-  recent.push(now); buckets.set(key, recent); return true;
+  sweepRateBuckets(now);
+  const current = buckets.get(key);
+  const recent = (current?.timestamps ?? []).filter((timestamp) => now - timestamp < windowMs);
+  const bucket = { timestamps: recent, windowMs, lastSeen: now };
+  if (recent.length >= limit) { buckets.set(key, bucket); return false; }
+  recent.push(now); buckets.set(key, bucket); return true;
 }
+
+function sweepRateBuckets(now: number): void {
+  if (now - lastBucketSweep < 60_000 && buckets.size < 5_000) return;
+  lastBucketSweep = now;
+  for (const [key, bucket] of buckets) {
+    if (now - bucket.lastSeen >= bucket.windowMs) buckets.delete(key);
+  }
+  if (buckets.size <= 10_000) return;
+  const overflow = buckets.size - 10_000;
+  [...buckets.entries()].sort((a, b) => a[1].lastSeen - b[1].lastSeen).slice(0, overflow).forEach(([key]) => buckets.delete(key));
+}
+
+export function resetRateLimitsForTests(): void { buckets.clear(); lastBucketSweep = 0; }

@@ -12,7 +12,7 @@ const schema = z.object({
 
 export async function POST(request: Request) {
   const client = request.headers.get("x-forwarded-for")?.split(",")[0] ?? "local";
-  if (!checkRateLimit(`correction:${client}`, 8, 3_600_000)) return NextResponse.json({ error: "提交过于频繁，请稍后再试" }, { status: 429 });
+  if (!checkRateLimit(`correction:${client}`, 8, 3_600_000)) return NextResponse.json({ error: "提交过于频繁，请稍后再试" }, { status: 429, headers: { "Retry-After": "3600", "Cache-Control": "no-store" } });
   try {
     const parsed = schema.safeParse(await request.json());
     if (!parsed.success) return NextResponse.json({ error: "纠错信息不完整" }, { status: 400 });
