@@ -1,4 +1,4 @@
-import Database from "better-sqlite3";
+import { DatabaseSync } from "node:sqlite";
 import fs from "node:fs";
 import path from "node:path";
 import postgres from "postgres";
@@ -41,7 +41,7 @@ function placeId(name: string, longitude: number, latitude: number): string {
 
 export function createSqliteScenicRegistry(file = getSqlitePath()): ScenicRegistry {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  const db = new Database(file); db.pragma("journal_mode = WAL"); db.pragma("foreign_keys = ON");
+  const db = new DatabaseSync(file); db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON");
   migrateSqlite(db);
   const search = db.prepare(`
     SELECT DISTINCT p.*,
@@ -55,7 +55,7 @@ export function createSqliteScenicRegistry(file = getSqlitePath()): ScenicRegist
   return {
     async search(query, limit = 10) {
       const normalized = normalize(query); const like = `%${query.trim()}%`; const normalizedLike = `%${normalized}%`;
-      const rows = search.all(query.trim(), normalized, like, normalizedLike, like, normalizedLike, like, limit) as RegistryRow[];
+      const rows = search.all(query.trim(), normalized, like, normalizedLike, like, normalizedLike, like, limit) as unknown as RegistryRow[];
       return uniqueRegistryRows(rows).map(toPlace);
     },
     async submitCorrection(input) {
@@ -65,16 +65,27 @@ export function createSqliteScenicRegistry(file = getSqlitePath()): ScenicRegist
   };
 }
 
-function migrateSqlite(db: Database.Database) {
+function migrateSqlite(db: DatabaseSync) {
   db.exec("CREATE TABLE IF NOT EXISTS schema_migrations(version TEXT PRIMARY KEY, name TEXT NOT NULL, checksum TEXT NOT NULL, applied_at INTEGER NOT NULL)");
   const applied = new Map((db.prepare("SELECT version, checksum FROM schema_migrations").all() as { version: string; checksum: string }[]).map((row) => [row.version, row.checksum]));
   if (applied.has(migration001.version) && applied.get(migration001.version) !== migration001.checksum) throw new Error("Migration 001 checksum mismatch");
-  if (!applied.has(migration001.version)) db.transaction(() => { db.exec(migration001.sqliteUp); db.prepare("INSERT INTO schema_migrations VALUES (?, ?, ?, ?)").run(migration001.version, migration001.name, migration001.checksum, Date.now()); })();
+  if (!applied.has(migration001.version)) runSqliteTransaction(db, () => { db.exec(migration001.sqliteUp); db.prepare("INSERT INTO schema_migrations VALUES (?, ?, ?, ?)").run(migration001.version, migration001.name, migration001.checksum, Date.now()); });
   if (applied.has(migration002.version) && applied.get(migration002.version) !== migration002.checksum) throw new Error("Migration 002 checksum mismatch");
-  if (!applied.has(migration002.version)) db.transaction(() => { seedSqlite(db); db.prepare("INSERT INTO schema_migrations VALUES (?, ?, ?, ?)").run(migration002.version, migration002.name, migration002.checksum, Date.now()); })();
+  if (!applied.has(migration002.version)) runSqliteTransaction(db, () => { seedSqlite(db); db.prepare("INSERT INTO schema_migrations VALUES (?, ?, ?, ?)").run(migration002.version, migration002.name, migration002.checksum, Date.now()); });
 }
 
-function seedSqlite(db: Database.Database) {
+function runSqliteTransaction(db: DatabaseSync, operation: () => void) {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    operation();
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function seedSqlite(db: DatabaseSync) {
   const now = Date.now();
   const insertPlace = db.prepare(`INSERT OR IGNORE INTO scenic_places(id,standard_name,province,city,address,latitude,longitude,elevation,scenic_type,coordinate_system,coordinate_precision,quality_status,confidence,source_name,source_reference,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,'WGS84','center','curated',78,'curated_seed','internal:v1',1,?,?)`);
   const insertAlias = db.prepare("INSERT OR IGNORE INTO scenic_aliases(id,scenic_place_id,alias,normalized_alias,alias_type,created_at) VALUES(?,?,?,?,?,?)");

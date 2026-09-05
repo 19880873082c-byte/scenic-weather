@@ -2,6 +2,9 @@
   "name": "scenic-weather",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": "24.x"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -13,7 +16,6 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
-    "better-sqlite3": "^13.0.3",
     "echarts": "^6.1.0",
     "echarts-for-react": "^3.0.6",
     "lucide-react": "^1.31.0",
@@ -27,8 +29,7 @@
   "devDependencies": {
     "@playwright/test": "^1.62.1",
     "@tailwindcss/postcss": "^4",
-    "@types/better-sqlite3": "^9.6.0",
-    "@types/node": "^20",
+    "@types/node": "^24",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@vitest/coverage-v8": "^4.1.10",

@@ -1,4 +1,4 @@
-import Database from "better-sqlite3";
+import { DatabaseSync } from "node:sqlite";
 import fs from "node:fs";
 import path from "node:path";
 import postgres from "postgres";
@@ -15,8 +15,8 @@ let store: CacheStore | null = null;
 function sqliteStore(): CacheStore {
   const cachePath = getSqlitePath();
   fs.mkdirSync(path.dirname(cachePath), { recursive: true });
-  const db = new Database(cachePath);
-  db.pragma("journal_mode = WAL");
+  const db = new DatabaseSync(cachePath);
+  db.exec("PRAGMA journal_mode = WAL");
   db.exec("CREATE TABLE IF NOT EXISTS api_cache (key TEXT PRIMARY KEY, value TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL)");
   const getStatement = db.prepare("SELECT value, created_at, expires_at FROM api_cache WHERE key = ?");
   const setStatement = db.prepare("INSERT INTO api_cache(key, value, created_at, expires_at) VALUES(?, ?, ?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, created_at=excluded.created_at, expires_at=excluded.expires_at");

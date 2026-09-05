@@ -1,4 +1,4 @@
-import Database from "better-sqlite3";
+import { DatabaseSync } from "node:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -20,7 +20,7 @@ describe("scenic registry migrations and search", () => {
     const first = createSqliteScenicRegistry(databasePath);
     const second = createSqliteScenicRegistry(databasePath);
 
-    const db = new Database(databasePath, { readonly: true });
+    const db = new DatabaseSync(databasePath, { readOnly: true });
     const migrationCount = (db.prepare("SELECT count(*) AS count FROM schema_migrations").get() as { count: number }).count;
     const placeCount = (db.prepare("SELECT count(*) AS count FROM scenic_places").get() as { count: number }).count;
     db.close();
@@ -55,7 +55,7 @@ describe("scenic registry migrations and search", () => {
       proposed: { address: "建议核对南大门入口" },
     });
 
-    const db = new Database(databasePath, { readonly: true });
+    const db = new DatabaseSync(databasePath, { readOnly: true });
     const row = db.prepare("SELECT id, scenic_place_id, status FROM place_corrections WHERE id = ?").get(correctionId) as { id: string; scenic_place_id: string; status: string };
     db.close();
     await registry.close();

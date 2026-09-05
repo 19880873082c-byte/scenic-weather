@@ -10,7 +10,7 @@ interface DatabaseRuntimeEnv { DATABASE_URL?: string; VERCEL?: string; SQLITE_PA
 
 export function getDatabaseRuntimeStatus(env: DatabaseRuntimeEnv = { DATABASE_URL: process.env.DATABASE_URL, VERCEL: process.env.VERCEL, SQLITE_PATH: process.env.SQLITE_PATH }): DatabaseRuntimeStatus {
   if (env.DATABASE_URL?.trim()) return { backend: "postgresql", configured: true, problems: [] };
-  if (env.VERCEL && !env.SQLITE_PATH?.trim()) return {
+  if (env.VERCEL) return {
     backend: "sqlite",
     configured: false,
     problems: ["Vercel 等无持久磁盘环境必须配置 DATABASE_URL；SQLite 仅适合本地或挂载了持久磁盘的单机部署"],
